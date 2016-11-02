@@ -51,6 +51,7 @@
     <Compile Include="Constants.cs" />
     <Compile Include="Defect.cs" />
     <Compile Include="Device.cs" />
+    <Compile Include="DriveLevelCapacitanceProfiling.cs" />
     <Compile Include="Utils.cs" />
     <Compile Include="Properties\AssemblyInfo.cs" />
   </ItemGroup>

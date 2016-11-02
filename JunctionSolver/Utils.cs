@@ -6,53 +6,111 @@ using System.Threading.Tasks;
 
 namespace JunctionSolver
 {
-    public static class Utils
+    /// <summary>
+    /// Utilities for solving Poisson's equation.
+    /// </summary>
+    internal static class Utils
     {
-        public static double NoumerovStep(double curP, double prevP, double nextQ, double curQ, double prevQ, double stepSizeSquared)
+        /// <summary>
+        /// Calculate the next value of P on the grid using Numerov method, where P'' = Q.
+        /// </summary>
+        /// <param name="curP">P at position i</param>
+        /// <param name="prevP">P at position i-1</param>
+        /// <param name="nextQ">Q at position i+1</param>
+        /// <param name="curQ">Q at position i</param>
+        /// <param name="prevQ">Q at position i-1</param>
+        /// <param name="stepSizeSquared">The squared grid spacing.</param>
+        /// <returns>P at position i+1</returns>
+        private static double NumerovStep(double curP, double prevP, double nextQ, double curQ, double prevQ, double stepSizeSquared)
         {
             double nextP = 2.0 * curP - prevP + stepSizeSquared * curQ + (stepSizeSquared / 12) * (nextQ + prevQ - 2 * curQ);
             return nextP;
         }
 
-        public static void NoumerovSolve(Device device)
+        /// <summary>
+        /// Calculate the next potential value using a Numerov step on Poisson's equation.
+        /// </summary>
+        /// <param name="device">The device being solved.</param>
+        /// <param name="currentIndex">The current index of the position grid.</param>
+        /// <returns></returns>
+        private static double PoissonNumerovStep(Device device, int currentIndex)
         {
+            // The charge density needs to be multiplied by the electric flux constant (q/ε)
+            // to get the equation into the form required by the general Numerov method (P'' = Q)
+            return NumerovStep(
+                    device.Potential[currentIndex],
+                    device.Potential[currentIndex - 1],
+                    device.ElectricFluxConstant * device.ChargeDensity[currentIndex + 1],
+                    device.ElectricFluxConstant * device.ChargeDensity[currentIndex],
+                    device.ElectricFluxConstant * device.ChargeDensity[currentIndex - 1],
+                    device.PositionSpacingSquared
+                    );
+        }
+
+        /// <summary>
+        /// Estimates the potential at currentIndex + 1.
+        /// </summary>
+        /// <remarks>
+        /// Importantly, this does not use any information about the charge density at currentIndex + 1.
+        /// Thus, we can use this to estimate the next potential value, which will then allow us to 
+        /// estimate the charge density at currentIndex + 1, which in turn allows us to calculate a more
+        /// accurate value of the potential at currentIndex + 1.
+        /// </remarks>
+        /// <param name="device">The device object being solved.</param>
+        /// <param name="currentIndex">The currentIndex on the position grid.</param>
+        /// <returns>An estimate of the potential at currentIndex + 1.</returns>
+        private static double EstimateNextPotential(Device device, int currentIndex)
+        {
+            return 2 * device.Potential[currentIndex]
+                    - device.Potential[currentIndex - 1]
+                    + device.PositionSpacingSquared * device.ElectricFluxConstant * device.ChargeDensity[currentIndex];
+        }
+
+        /// <summary>
+        /// Solves Poisson's equation using the Numerov method.
+        /// </summary>
+        /// <remarks>
+        /// Only makes a single pass over the grid. Solution is entirely determine by the initial values 
+        /// of the potential (at the back of the device) and the density of states. Thus, to statisfy the 
+        /// boundary conditions at the interface, this method will need to be part of a larger scheme, e.g.,
+        /// the shooting method.
+        /// </remarks>
+        /// <param name="device">The device object to solve.</param>
+        private static void NumerovSolve(Device device)
+        {
+            /* Force the fermi level to be flat. Not needed right now because the Fermi level is never changed.
             for (int i = 0; i < device.NumberOfPositionPoints; i++)
             {
                 device.FermiLevel[i] = device.NeutralRegionFermiLevel;
             }
+            */
             
+            // Loop over the position grid starting at the second position (i=1).
             for (int i = 1; i < device.NumberOfPositionPoints - 1; i++)
             {
-                device.Potential[i + 1] = 
-                    2 * device.Potential[i] 
-                    - device.Potential[i - 1]
-                    + device.PositionSpacingSquared * device.ElectricFluxConstant * device.ChargeDensity[i];
+                // Estimate the next potential value.
+                device.Potential[i + 1] = EstimateNextPotential(device, i);
 
-                /*
+                /* Adjust the Fermi level so it doesn't cross mid-gap. Not currently used.
                 if (device.Potential[i + 1] - device.FermiLevel[i + 1] > device.HalfBandGap)
                 {
                     device.FermiLevel[i + 1] = device.Potential[i + 1] - device.HalfBandGap;
                 }
                 */
 
-                device.ChargeDensity[i + 1] = CalcRho(device.FermiLevel[i + 1] - device.Potential[i + 1], i + 1, device);
-                
-                device.Potential[i + 1] = NoumerovStep(
-                    device.Potential[i],
-                    device.Potential[i - 1],
-                    device.ElectricFluxConstant * device.ChargeDensity[i + 1],
-                    device.ElectricFluxConstant * device.ChargeDensity[i],
-                    device.ElectricFluxConstant * device.ChargeDensity[i - 1],
-                    device.PositionSpacingSquared
-                    );
+                // Calculate the next charge density value based on the estimate.
+                device.ChargeDensity[i + 1] = CalculateChargeDensity(device.FermiLevel[i + 1] - device.Potential[i + 1], i + 1, device);
+
+                // Recalculate the next potential value using a Numerov step.
+                device.Potential[i + 1] = PoissonNumerovStep(device, i);
             }
         }
 
-        public static void NoumerovSolve(Device device, double temperature, double frequency)
+        private static void NoumerovSolve(Device device, double temperature, double frequency)
         {
             double demarcationEnergy = CalcDemarcationEnergy(device, temperature, frequency);
 
-            /*
+            /* Force the fermi level to be flat. Not needed right now because the Fermi level is never changed.
             for (int i = 0; i < device.NumberOfPositionPoints; i++)
             {
                 device.FermiLevel[i] = device.NeutralRegionFermiLevel;
@@ -61,55 +119,43 @@ namespace JunctionSolver
 
             for (int i = 1; i < device.NumberOfPositionPoints - 1; i++)
             {
-                device.Potential[i + 1] =
-                    2 * device.Potential[i]
-                    - device.Potential[i - 1]
-                    + device.PositionSpacingSquared * device.ElectricFluxConstant * device.ChargeDensity[i];
+                // Estimate the next AC potential value.
+                device.Potential[i + 1] = EstimateNextPotential(device, i);
 
-                /*
+                /* Adjust the Fermi level so it doesn't cross mid-gap. Not currently used.
                 if (device.Potential[i + 1] - device.FermiLevel[i + 1] > device.HalfBandGap)
                 {
                     device.FermiLevel[i + 1] = device.Potential[i + 1] - device.HalfBandGap;
                 }
-                if (device.Potential[i+1] < device.FermiLevel[i+1] + demarcationEnergy)
-                {
-                    device.ChargeDensity[i + 1] = CalcRho(device.FermiLevel[i + 1] - device.Potential[i + 1], i + 1, device);
-                }
-                else if (device.DCPotential[i+1] < device.FermiLevel[i+1] + demarcationEnergy)
-                {
-                    device.ChargeDensity[i + 1] = CalcRho(-demarcationEnergy, i + 1, device);
-                }
-                else
-                {
-                    device.ChargeDensity[i + 1] = device.DCChargeDensity[i + 1];
-                }
                 */
-                
+
+                // Calculate next AC charge density accounting for whether or not the charge can respond.
                 if (device.Potential[i + 1] < device.DCFermiLevel[i + 1] + demarcationEnergy)
                 {
-                    device.ChargeDensity[i + 1] = CalcRho(device.DCFermiLevel[i + 1] - device.Potential[i + 1], i + 1, device);
+                    // The AC potential is within a demarcation energy of the Fermi level-- everything can respond.
+                    // Calculate the next charge density as normal.
+                    device.ChargeDensity[i + 1] = CalculateChargeDensity(device.DCFermiLevel[i + 1] - device.Potential[i + 1], i + 1, device);
                 }
                 else if (device.DCPotential[i + 1] < device.DCFermiLevel[i + 1] + demarcationEnergy)
                 {
-                    device.ChargeDensity[i + 1] = CalcRho(-demarcationEnergy, i + 1, device);
+                    // The AC potenial is not within a demarcation energy of the fermi level (b/c the above condition failed),
+                    // but the DC potenital still is. The release of charge is emission limited, therefore the charge density
+                    // is simply detemined by the demarcation energy.
+                    device.ChargeDensity[i + 1] = CalculateChargeDensity(-demarcationEnergy, i + 1, device);
                 }
                 else
                 {
+                    // Neither the AC or DC potential is within a demarcation energy of the Fermi-- nothing can respond.
+                    // The charge density is frozen in the DC configuration. 
                     device.ChargeDensity[i + 1] = device.DCChargeDensity[i + 1];
                 }
 
-                device.Potential[i + 1] = NoumerovStep(
-                    device.Potential[i],
-                    device.Potential[i - 1],
-                    device.ElectricFluxConstant * device.ChargeDensity[i + 1],
-                    device.ElectricFluxConstant * device.ChargeDensity[i],
-                    device.ElectricFluxConstant * device.ChargeDensity[i - 1],
-                    device.PositionSpacingSquared
-                    );
+                // Recalculate the next potential value using a Numerov step.
+                device.Potential[i + 1] = PoissonNumerovStep(device, i);
             }
         }
 
-        public static void RhoTable(Device device)
+        internal static void RhoTable(Device device)
         {
             for (int j = 0; j < device.NumberOfPositionPoints; j++)
             {
@@ -126,12 +172,12 @@ namespace JunctionSolver
             }
         }
 
-        public static double CalcRho(double phi, int i, Device device)
+        private static double CalculateChargeDensity(double phi, int i, Device device)
         {
             return Interp(phi, device.Energy, device.ChargeDensityTable[i], device.EnergySpacing);
         }
 
-        public static void Calcg(Device device)
+        internal static void CalculateDensityOfStates(Device device)
         {
             device.DensityOfStates = new double[device.NumberOfPositionPoints][];
             for (int i = 0; i < device.NumberOfPositionPoints; i++)
@@ -151,7 +197,7 @@ namespace JunctionSolver
             }
         }
 
-        public static double[] Gaussian(double[] x, double mu, double sigma)
+        internal static double[] Gaussian(double[] x, double mu, double sigma)
         {
             double[] result = new double[x.Length];
 
@@ -163,7 +209,7 @@ namespace JunctionSolver
             return result;
         }
 
-        public static void Bracket(Device device)
+        internal static void Bracket(Device device)
         {
             device.Message += "Bracketing DC solution...\n";
 
@@ -171,7 +217,7 @@ namespace JunctionSolver
 
             InitializeDevice(device, 1e-25);
             
-            NoumerovSolve(device);
+            NumerovSolve(device);
 
             int numIterations = 0;
             int maxIterations = 20;
@@ -183,7 +229,7 @@ namespace JunctionSolver
                     device.LowerLimit = device.Potential[0];
                     InitializeDevice(device, 2 * device.LowerLimit);
 
-                    NoumerovSolve(device);
+                    NumerovSolve(device);
 
                     numIterations++;
                     
@@ -205,7 +251,7 @@ namespace JunctionSolver
                     device.UpperLimit = device.Potential[0];
                     InitializeDevice(device, 0.5 * device.UpperLimit);
 
-                    NoumerovSolve(device);
+                    NumerovSolve(device);
 
                     numIterations++;
                     
@@ -222,7 +268,7 @@ namespace JunctionSolver
             }
         }
 
-        public static void Bracket(Device device, double temperature, double frequency, double acVoltage)
+        internal static void Bracket(Device device, double temperature, double frequency, double acVoltage)
         {
             device.UpperLimit = device.LowerLimit = 0;
 
@@ -254,13 +300,13 @@ namespace JunctionSolver
             }
         }
 
-        public static double Calcx0(Device device)
+        internal static double Calcx0(Device device)
         {
             return Math.Sqrt(device.DielectricConstant / (Constants.ElementaryCharge * 
                 Interp(device.NeutralRegionFermiLevel, device.Energy, device.DensityOfStates[0], device.EnergySpacing)));
         }
 
-        public static void Solve(Device device)
+        internal static void Solve(Device device)
         {
             int numIterations = 1;
             double tolerance = 1e-6;
@@ -270,7 +316,7 @@ namespace JunctionSolver
             {
                 InitializeDevice(device, 0.5 * (device.UpperLimit + device.LowerLimit));
 
-                NoumerovSolve(device);
+                NumerovSolve(device);
 
                 device.Message += String.Format("{0,0:000}  {1,8:f7}  {2,8:f7}  {3,8:e2}  {4,8:e2}\n", 
                     numIterations,
@@ -309,7 +355,7 @@ namespace JunctionSolver
             }
         }
 
-        public static void Solve(Device device, double temperature, double frequency, double acVoltage)
+        internal static void Solve(Device device, double temperature, double frequency, double acVoltage)
         {
             double tolerance = 1e-6;
 
@@ -330,7 +376,7 @@ namespace JunctionSolver
             }
         }
 
-        public static double Interp(double x, double[] xarray, double[] yarray, double dx)
+        private static double Interp(double x, double[] xarray, double[] yarray, double dx)
         {
             double result = 0;
             int i = (int)Math.Floor((x - xarray[0])/ dx);
@@ -340,44 +386,31 @@ namespace JunctionSolver
             return result;
         }
 
-        public static void InitializeDevice(Device device, double initialPotential)
+        private static void InitializeDevice(Device device, double initialPotential)
         {
             device.Potential[0] = initialPotential;
             device.Potential[1] = device.Potential[0] * Math.Exp(device.PositionSpacing / device.X0);
-            device.ChargeDensity[0] = CalcRho(device.FermiLevel[0] - device.Potential[0], 0, device);
-            device.ChargeDensity[1] = CalcRho(device.FermiLevel[1] - device.Potential[1], 1, device);
+            device.ChargeDensity[0] = CalculateChargeDensity(device.FermiLevel[0] - device.Potential[0], 0, device);
+            device.ChargeDensity[1] = CalculateChargeDensity(device.FermiLevel[1] - device.Potential[1], 1, device);
         }
 
-        public static double CalcDemarcationEnergy(Device device, double temperature, double frequency)
+        internal static double CalcDemarcationEnergy(Device device, double temperature, double frequency)
         {
             return Constants.BoltzmannConstant * temperature * Math.Log(device.ThermalEmissionPrefactor * temperature * temperature / frequency);
         }
 
-        public static double CalcCapacitance(Device device)
+        internal static double CalcCapacitance(Device device)
         {
+            double dV = (device.Potential[device.NumberOfPositionPoints - 1] 
+                - device.DCPotential[device.NumberOfPositionPoints - 1]) 
+                / Constants.ElementaryCharge;
+
             double dQ = 0;
-            double dV = (device.Potential[device.NumberOfPositionPoints - 1] - device.DCPotential[device.NumberOfPositionPoints - 1]) / Constants.ElementaryCharge;
             for (int i = 0; i < device.NumberOfPositionPoints; i++)
             {
                 dQ += device.ChargeDensity[i] - device.DCChargeDensity[i];
             }
             return dQ / dV * device.PositionSpacing;
         }
-
-        public static void CalcDriveLevelDensity(Device device, double[] driveLevelValues, double[] capacitanceValues, 
-            out double Ndl, out double C0, out double C1)
-        {
-            LMDotNet.LMSolver lmsolver = new LMDotNet.LMSolver();
-            var fit = lmsolver.FitCurve(
-                (V, C) => C[0] - C[1] * V + 2 * C[1] * C[1] / C[0] * V * V - 5 * C[1] * C[1] * C[1] / (C[0] * C[0]) * V * V * V,
-                new[] { 1e-5, -1e-5 },
-                driveLevelValues,
-                capacitanceValues
-                );
-            C0 = fit.OptimizedParameters[0];
-            C1 = fit.OptimizedParameters[1];
-            Ndl = -C0 * C0 * C0 / (2 * Constants.ElementaryCharge * device.DielectricConstant * C1);
-        }
-
     }
 }
