@@ -113,7 +113,7 @@ namespace JunctionSolver
         /// Array for storing precalculated charge density integrals (in C/m^3) as a function of
         /// position (first index) and energy (second index).
         /// </summary>
-        public double[][] ChargeDensityTable { get; set; }
+        public double[][] ChargeDensityIntegralTable { get; set; }
 
         /// <summary>
         /// Array for storing the DC potential profile (in J).
@@ -129,6 +129,8 @@ namespace JunctionSolver
         /// Array for storing the DC fermi level profile (in J).
         /// </summary>
         public double[] DCFermiLevel { get; set; }
+
+        public List<DefectParameters> DefectParameterList { get; set; }
 
         /// <summary>
         /// List for holding Defect objects that are used to construct the
@@ -172,6 +174,11 @@ namespace JunctionSolver
         internal double PositionSpacingSquared;
 
         /// <summary>
+        /// The position spacing (in m) of the position grid for the DC solution.
+        /// </summary>
+        internal double DCPositionSpacing;
+
+        /// <summary>
         /// One half of the bandgap (in J).
         /// </summary>
         internal double HalfBandGap;
@@ -211,42 +218,21 @@ namespace JunctionSolver
         /// <summary>
         /// The constructor.
         /// </summary>
-        /// <param name="numberOfPositionPoints">The number of points in the position grid.</param>
-        /// <param name="numberOfEnergyPoints">The number of points in the energy grid.</param>
-        /// <param name="dielectricConstant">The dielectric constant of the device in F/m.</param>
-        /// <param name="thickness">The thickness of the model in m.</param>
-        /// <param name="bandGap">The bandgap of the device in J.</param>
-        /// <param name="neutralRegionFermiLevel">The neutral region Fermi level in J. Should be negative.</param>
-        /// <param name="shallowDopingDensity">The shallow doping density of the device in /m^3.</param>
-        /// <param name="thermalEmissionPrefactor">The thermal emission prefactor of the device in Hz/K^2.</param>
-        /// <param name="builtInVoltage">The built-in voltage of the device in V.</param>
-        /// <param name="appliedVoltage">The DC voltage applied to the device in V.</param>
-        /// <param name="defectList">A list containing Defect objects to be included in the model.</param>
-        public Device(
-            int numberOfPositionPoints,
-            int numberOfEnergyPoints,
-            double dielectricConstant,
-            double thickness,
-            double bandGap,
-            double neutralRegionFermiLevel,
-            double shallowDopingDensity,
-            double thermalEmissionPrefactor,
-            double builtInVoltage,
-            double appliedVoltage,
-            List<Defect> defectList
-            )
+        /// <param name="deviceParameters">Object that stores the device parameters</param>
+        public Device(DeviceParameters deviceParameters)
         {
             // Copy input parameters to the appropriate properties and fields.
-            NumberOfPositionPoints = numberOfPositionPoints;
-            NumberOfEnergyPoints = numberOfEnergyPoints;
-            DielectricConstant = dielectricConstant;
-            Thickness = thickness;
-            BandGap = bandGap;
-            NeutralRegionFermiLevel = neutralRegionFermiLevel;
-            ShallowDopingDensity = shallowDopingDensity;
-            ThermalEmissionPrefactor = thermalEmissionPrefactor;
-            BuiltInVoltage = builtInVoltage;
-            AppliedVoltage = appliedVoltage;
+            NumberOfPositionPoints = deviceParameters.NumberOfPositionPoints;
+            NumberOfEnergyPoints = deviceParameters.NumberOfEnergyPoints;
+            DielectricConstant = deviceParameters.DielectricConstant;
+            Thickness = deviceParameters.Thickness;
+            BandGap = deviceParameters.BandGap;
+            NeutralRegionFermiLevel = deviceParameters.NeutralRegionFermiLevel;
+            ShallowDopingDensity = deviceParameters.ShallowDopingDensity;
+            ThermalEmissionPrefactor = deviceParameters.ThermalEmissionPrefactor;
+            BuiltInVoltage = deviceParameters.BuiltInVoltage;
+            AppliedVoltage = deviceParameters.AppliedVoltage;
+            DefectParameterList = deviceParameters.DefectParameterList;
 
             // Calculate other properties and fields.
             HalfBandGap = 0.5 * BandGap;
@@ -259,17 +245,18 @@ namespace JunctionSolver
             // Initialize arrays.
             Position = new double[NumberOfPositionPoints];
             FlippedPosition = new double[NumberOfPositionPoints];
+            //DCFlippedPosition = new double[NumberOfPositionPoints];
             Potential = new double[NumberOfPositionPoints];
             ChargeDensity = new double[NumberOfPositionPoints];
             FermiLevel = new double[NumberOfPositionPoints];
 
-            DCPotential = new double[NumberOfPositionPoints];
-            DCChargeDensity = new double[NumberOfPositionPoints];
-            DCFermiLevel = new double[NumberOfPositionPoints];
+            //DCPotential = new double[NumberOfPositionPoints];
+            //DCChargeDensity = new double[NumberOfPositionPoints];
+            //DCFermiLevel = new double[NumberOfPositionPoints];
 
             Energy = new double[NumberOfEnergyPoints];
             DensityOfStates = new double[NumberOfPositionPoints][];
-            ChargeDensityTable = new double[NumberOfPositionPoints][];
+            ChargeDensityIntegralTable = new double[NumberOfPositionPoints][];
 
             // Fill position space arrays, define second dimension of 2D arrays.
             for (int i = 0; i < NumberOfPositionPoints; i++)
@@ -278,7 +265,7 @@ namespace JunctionSolver
                 FlippedPosition[NumberOfPositionPoints - 1 - i] = Position[i];
                 FermiLevel[i] = NeutralRegionFermiLevel;
                 DensityOfStates[i] = new double[NumberOfEnergyPoints];
-                ChargeDensityTable[i] = new double[NumberOfEnergyPoints];
+                ChargeDensityIntegralTable[i] = new double[NumberOfEnergyPoints];
             }
             
             // Fill energy space arrays.
@@ -289,57 +276,21 @@ namespace JunctionSolver
 
             // Initialize the DefectList.
             DefectList = new List<Defect>();
-
+            
             // Fill DefectList.
-            for (int i = 0; i < defectList.Count; i++)
+            for (int i = 0; i < DefectParameterList.Count; i++)
             {
-                // If the defect is the shallow dopant, explicitly force it to be
-                // centered on the Fermi level, and to have the correct density.
-                if (defectList[i].Label == "Shallow Dopant")
-                {
-                    DefectList.Add(new Defect(
-                        this,
-                        NeutralRegionFermiLevel,
-                        defectList[i].FWHM,
-                        2 * ShallowDopingDensity * Constants.ElementaryCharge, // Factor of 2 because only half the defect is integrated over.
-                        defectList[i].Label,
-                        defectList[i].PositionDependence
-                    ));
-                }
-                else
-                {
-                    DefectList.Add(new Defect(
-                        this,
-                        defectList[i].Energy,
-                        defectList[i].FWHM,
-                        defectList[i].Magnitude,
-                        defectList[i].Label,
-                        defectList[i].PositionDependence
-                    ));
-                }
-            }
-
-            // If the defect list is empty add the shallow dopant.
-            if (DefectList == null || DefectList.Count == 0)
-            {
-                DefectList.Add(new Defect(
-                this,
-                NeutralRegionFermiLevel,
-                30e-3 * Constants.ElementaryCharge,
-                2 * ShallowDopingDensity * Constants.ElementaryCharge,
-                "Shallow Dopant",
-                "Constant"
-                ));
+                DefectList.Add(new Defect(this, DefectParameterList[i]));
             }
 
             // Calculate the density of states.
             Utils.CalculateDensityOfStates(this);
 
             // Precalculate the charge density integrals.
-            Utils.RhoTable(this);
+            Utils.CalculateChargeDensityIntegralTable(this);
 
             // Calculate the characteristic length.
-            X0 = Utils.Calcx0(this);
+            X0 = Utils.CalculateX0(this);
         }
 
         #endregion [Constructor]
@@ -351,9 +302,14 @@ namespace JunctionSolver
         /// </summary>
         public void CopyResultsToDCArrays()
         {
+            DCPotential = new double[NumberOfPositionPoints];
+            DCChargeDensity = new double[NumberOfPositionPoints];
+            DCFermiLevel = new double[NumberOfPositionPoints];
+
             Potential.CopyTo(DCPotential, 0);
             ChargeDensity.CopyTo(DCChargeDensity, 0);
             FermiLevel.CopyTo(DCFermiLevel, 0);
+            DCPositionSpacing = PositionSpacing;
         }
 
         /// <summary>
@@ -392,13 +348,22 @@ namespace JunctionSolver
                 FlippedPosition[NumberOfPositionPoints - 1 - i] = Position[i];
             }
 
+            // Initialize the DefectList.
+            DefectList = new List<Defect>();
+
+            // Fill DefectList.
+            for (int i = 0; i < DefectParameterList.Count; i++)
+            {
+                DefectList.Add(new Defect(this, DefectParameterList[i]));
+            }
+
             // Recalculate the density of states and the charge density integral table.
             Utils.CalculateDensityOfStates(this);
 
-            Utils.RhoTable(this);
+            Utils.CalculateChargeDensityIntegralTable(this);
 
             // Recalculate the characteristic length.
-            X0 = Utils.Calcx0(this);
+            X0 = Utils.CalculateX0(this);
         }
 
         /// <summary>
@@ -445,6 +410,44 @@ namespace JunctionSolver
 
             // Find the solution.
             Utils.Solve(this, temperature, frequency, acVoltage);
+        }
+
+        /// <summary>
+        /// Calculates the capacitance (in F/m^2) of the device.
+        /// </summary>
+        /// <returns></returns>
+        public double CalculateCapacitance()
+        {
+            // Calculate the change in voltage.
+            double dV = (Potential[NumberOfPositionPoints - 1]
+                - DCPotential[NumberOfPositionPoints - 1])
+                / Constants.ElementaryCharge;
+
+            // Calculate the charge in the AC and DC cases.
+            double totalChargeAC = 0;
+            double totalChargeDC = 0;
+            for (int i = 0; i < NumberOfPositionPoints; i++)
+            {
+                totalChargeAC += ChargeDensity[i];
+                totalChargeDC += DCChargeDensity[i];
+            }
+
+            // Calcualate the change in charge.
+            double dQ = totalChargeAC * PositionSpacing - totalChargeDC * DCPositionSpacing;
+
+            // Return the capacitance.
+            return dQ / dV;
+        }
+
+        /// <summary>
+        /// Calcualtes the demarcation energy (in J) of the device.
+        /// </summary>
+        /// <param name="temperature">The temperature (in K).</param>
+        /// <param name="frequency">The frequency (in Hz).</param>
+        /// <returns>The demarcation energy (in J).</returns>
+        public double CalculateDemarcationEnergy(double temperature, double frequency)
+        {
+            return Utils.CalculateDemarcationEnergy(this, temperature, frequency);
         }
 
         #endregion [Public Methods]

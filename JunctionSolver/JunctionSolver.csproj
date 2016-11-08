@@ -50,7 +50,9 @@
   <ItemGroup>
     <Compile Include="Constants.cs" />
     <Compile Include="Defect.cs" />
+    <Compile Include="DefectParameters.cs" />
     <Compile Include="Device.cs" />
+    <Compile Include="DeviceParameters.cs" />
     <Compile Include="DriveLevelCapacitanceProfiling.cs" />
     <Compile Include="Utils.cs" />
     <Compile Include="Properties\AssemblyInfo.cs" />

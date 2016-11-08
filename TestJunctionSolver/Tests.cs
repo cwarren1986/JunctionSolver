@@ -19,10 +19,14 @@ namespace TestJunctionSolver
             double ssd = 1e20;
             double tepf = 1e10;
             double V = 1.0;
-            
 
-            JunctionSolver.Device device = new JunctionSolver.Device(N, M, eps, thickness, Eg, Ef0, ssd, tepf, V, 0,
-                new System.Collections.Generic.List<JunctionSolver.Defect>());
+            var dpl = new System.Collections.Generic.List<JunctionSolver.DefectParameters>();
+
+            dpl.Add(new JunctionSolver.DefectParameters(Ef0, 30e-3 * q, 2 * ssd * q, "Shallow Dopant", "Constant"));
+
+            var deviceParameters = new JunctionSolver.DeviceParameters(N, M, eps, thickness, Eg, Ef0, ssd, tepf, V, 0, dpl);
+
+            JunctionSolver.Device device = new JunctionSolver.Device(deviceParameters);
 
             JunctionSolver.Utils.Bracket(device);
             
