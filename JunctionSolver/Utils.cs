@@ -191,8 +191,7 @@ namespace JunctionSolver
             // Calculate the last index i of xarray such that xarray[i] < x
             int i = (int)Math.Floor((x - xarray[0]) / dx);
 
-            // If i is outside the allowed range, set result to the appropriate end of yarray.
-            if (i <= 0) { return yarray[0]; }
+            // If i is too large, set it to the last value of the array.
             if (i >= yarray.Length - 1) { return yarray[yarray.Length - 1]; }
 
             // If i is legal, interpolate and return.
@@ -206,7 +205,7 @@ namespace JunctionSolver
         /// <param name="initialPotential">The value to which Potential[0] will be set.</param>
         private static void InitializeBoundary(Device device, double initialPotential)
         {
-            // Set Potential[0].
+            // Initialize the potential at the back of the device.
             device.Potential[0] = initialPotential;
 
             // Calculate the next potential value assuming exponential bands following the constant DOS formula.
